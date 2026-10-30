@@ -1,0 +1,2 @@
+# The export script uses only the Python standard library, so no packages are needed.
+# This file tells Railway the project is Python.
