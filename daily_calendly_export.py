@@ -28,6 +28,14 @@ from pathlib import Path
 
 API = "https://api.calendly.com"
 HERE = Path(__file__).resolve().parent
+
+# The Railway cron runs at 02:30 UTC. The window leaves room for a late start.
+RUN_WINDOW_START_UTC = 2
+RUN_WINDOW_END_UTC = 4
+
+
+def in_run_window(now):
+    return RUN_WINDOW_START_UTC <= now.hour < RUN_WINDOW_END_UTC
 EXPORT_DIR = HERE / "exports"
 
 
@@ -177,8 +185,14 @@ def main():
         list_forms(token)
         return
 
-    form_uri = require("CALENDLY_FORM_URI")
+    # On Railway, a deploy starts the script straight away. Only send during the daily window,
+    # so deploys and pushes do not email anyone. Local runs on your Mac are not restricted.
     now = datetime.now(timezone.utc)
+    if os.environ.get("RAILWAY_ENVIRONMENT") and not in_run_window(now):
+        print(f"Outside the daily run window ({RUN_WINDOW_START_UTC:02d}:00-{RUN_WINDOW_END_UTC:02d}:00 UTC). Nothing sent.")
+        return
+
+    form_uri = require("CALENDLY_FORM_URI")
     since = now - timedelta(hours=args.hours)
 
     submissions = fetch_submissions_since(token, form_uri, since)
