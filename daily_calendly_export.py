@@ -25,8 +25,9 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
-API = "https://api.calendly.com"
+API ="https://api.calendly.com"
 HERE = Path(__file__).resolve().parent
 
 # The Railway cron runs at 02:30 UTC. The window leaves room for a late start.
@@ -120,32 +121,52 @@ def add_booking_times(token, submissions):
         submission["event_starts_at"] = event_starts[event_uri]
 
 
-def build_csv(submissions):
-    """One row per submission. Question labels become columns, in the order they first appear."""
-    questions = []
-    for submission in submissions:
-        for qa in submission.get("questions_and_answers", []):
-            label = qa.get("question") or ""
-            if label not in questions:
-                questions.append(label)
+CSV_FORM_QUESTIONS = ["Name", "PMS", "Practice Name", "Work Email", "Work Phone", "Designation", "Referral Source", "Phone number"]
+CSV_COLUMNS = [
+    *CSV_FORM_QUESTIONS,
+    "Event Scheduled", "Booked At", "Event Starts At", "Result Type", "Result Value", "Created At", "UUID",
+]
+RESULT_TYPE_LABELS = {"event_type": "Event type", "external_url": "External URL", "custom_message": "Custom message"}
 
+
+def to_account_time(value, tz):
+    """Format a Calendly UTC timestamp in the account's timezone, as Calendly shows it."""
+    if not value:
+        return ""
+    return parse_time(value).astimezone(tz).strftime("%Y-%m-%d %H:%M")
+
+
+def result_value(result):
+    if not result:
+        return ""
+    if result.get("type") == "custom_message":
+        return (result.get("value") or {}).get("headline", "")
+    return result.get("value", "")
+
+
+def build_csv(submissions, tz):
+    """One row per submission, with the columns the team uses. Times are in the account timezone."""
     buffer = io.StringIO()
     writer = csv.writer(buffer)
-    writer.writerow([
-        "Submitted at (UTC)", "Event scheduled", "Routing result", "Booked At (UTC)", "Event Starts At (UTC)", *questions,
-    ])
+    writer.writerow(CSV_COLUMNS)
     for submission in submissions:
         answers = {qa.get("question"): qa.get("answer") or "" for qa in submission.get("questions_and_answers", [])}
         result = submission.get("result") or {}
         writer.writerow([
-            submission["created_at"],
-            "Yes" if submission.get("submitter") else "No",
-            result.get("type", ""),
-            submission.get("booked_at", ""),
-            submission.get("event_starts_at", ""),
-            *[answers.get(label, "") for label in questions],
+            *[answers.get(label, "") for label in CSV_FORM_QUESTIONS],
+            "TRUE" if submission.get("submitter") else "FALSE",
+            to_account_time(submission.get("booked_at"), tz),
+            to_account_time(submission.get("event_starts_at"), tz),
+            RESULT_TYPE_LABELS.get(result.get("type"), result.get("type", "")),
+            result_value(result),
+            to_account_time(submission["created_at"], tz),
+            submission["uri"].rsplit("/", 1)[-1],
         ])
     return buffer.getvalue()
+
+
+def account_timezone(token):
+    return ZoneInfo(api_get(token, f"{API}/users/me")["resource"]["timezone"])
 
 
 def send_email(csv_text, filename, subject, body):
@@ -197,7 +218,7 @@ def main():
 
     submissions = fetch_submissions_since(token, form_uri, since)
     add_booking_times(token, submissions)
-    csv_text = build_csv(submissions)
+    csv_text = build_csv(submissions, account_timezone(token))
 
     EXPORT_DIR.mkdir(exist_ok=True)
     local_date = datetime.now().strftime("%Y-%m-%d")

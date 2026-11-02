@@ -1,2 +1,3 @@
-# The export script uses only the Python standard library, so no packages are needed.
-# This file tells Railway the project is Python.
+# The export script uses the Python standard library, plus tzdata for timezone names.
+# This file also tells Railway the project is Python.
+tzdata
